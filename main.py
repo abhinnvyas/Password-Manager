@@ -6,6 +6,7 @@ from tkinter import font
 import hashlib
 import re
 from tkinter import Image
+from PIL import ImageTk, Image
 
 class PasswordManager:
     def __init__(self):
@@ -375,9 +376,14 @@ class PasswordManager:
         functions()
 
     def main(self):
+        #Enabling the foreign key support
         self.QUERY = "PRAGMA foreign_keys = ON"
         self.cursor.execute(self.QUERY)
         self.conn.commit()
+
+        #Setting the icon of the file
+        image = ImageTk.PhotoImage(Image.open('./logo.ico'))
+        self.root.iconphoto(False, image)
 
         self.loginFrame()
 
