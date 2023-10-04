@@ -1,3 +1,2 @@
-tkinter
 sqlite3
 pillow
