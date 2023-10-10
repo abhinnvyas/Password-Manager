@@ -7,6 +7,11 @@ import hashlib
 import re
 from tkinter import Image
 from PIL import ImageTk, Image
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives import hashes
 
 
 class PasswordManager:
@@ -15,6 +20,8 @@ class PasswordManager:
         self.USERNAME = ""
         self.PASSWORD = ""
         self.QUERY = ""
+        self.PUBLIC = None
+        self.PRIVATE = None
 
         self.conn = sqlite3.connect(self.DATABASE)
         self.cursor = self.conn.cursor()
@@ -28,6 +35,7 @@ class PasswordManager:
     def hashGenerator(self, password):
         """Generated MD5 Hashes"""
         hashedPassword = hashlib.md5(password.encode()).hexdigest()
+
         return hashedPassword
 
     def validatePassword(self, passwd):
@@ -36,6 +44,28 @@ class PasswordManager:
         mat = re.search(pat, passwd)
 
         return True if mat else False
+
+    def encryptPassword(self, message):
+        """Encrypt the Saved Passwords"""
+        return self.PUBLIC.encrypt(
+            message.encode(),
+            padding.OAEP(
+                mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                algorithm=hashes.SHA256(),
+                label=None
+            )
+        )
+
+    def decryptPassword(self, message):
+        """Encrypt the Saved Passwords"""
+        return self.PRIVATE.decrypt(
+            message,
+            padding.OAEP(
+                mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                algorithm=hashes.SHA256(),
+                label=None
+            )
+        )
 
     def loginFrame(self):
 
@@ -49,6 +79,15 @@ class PasswordManager:
 
             if len(result) == 1:
                 # self.root.geometry("500x350+500+200")
+                self.PUBLIC = serialization.load_pem_public_key(
+                    result[0][2].encode(),
+                    backend=default_backend()
+                )
+                self.PRIVATE = serialization.load_pem_private_key(
+                    result[0][3].encode(),
+                    password=None,
+                    backend=default_backend()
+                )
                 self.FunctionFrame()
 
             else:
@@ -118,19 +157,41 @@ class PasswordManager:
                     if self.validatePassword(passw1):
                         self.USERNAME = user.strip()
                         self.PASSWORD = self.hashGenerator(passw1)
+                        self.PRIVATE = rsa.generate_private_key(
+                            public_exponent=65537,
+                            key_size=2048,
+                            backend=default_backend()
+                        )
+                        self.PUBLIC = self.PRIVATE.public_key()
+
+                        private_key_pem = self.PRIVATE.private_bytes(
+                            encoding=serialization.Encoding.PEM,
+                            format=serialization.PrivateFormat.PKCS8,
+                            encryption_algorithm=serialization.NoEncryption()
+                        )
+
+                        public_key_pem = self.PUBLIC.public_bytes(
+                            encoding=serialization.Encoding.PEM,
+                            format=serialization.PublicFormat.SubjectPublicKeyInfo
+                        )
 
                         try:
-                            self.QUERY = f"INSERT INTO Users VALUES('{self.USERNAME}','{self.PASSWORD}')"
-                            self.cursor.execute(self.QUERY)
+                            self.cursor.execute('''
+                                    INSERT INTO Users VALUES (?,?, ?, ?)
+                            ''', (self.USERNAME, self.PASSWORD, public_key_pem.decode(), private_key_pem.decode()))
                             self.conn.commit()
-                        except Exception:
+                        except Exception as e:
                             msg.showerror(
                                 "Error", f"{self.USERNAME} already Exists")
+                            msg.showerror(
+                                "Error", e)
                             usrname.set("")
                             password.set("")
                             rePassword.set("")
                             self.USERNAME = ""
                             self.PASSWORD = ""
+                            self.PUBLIC = None
+                            self.PRIVATE = None
                         else:
                             msg.showinfo(
                                 "Success", "Account Created Successfully")
@@ -218,12 +279,16 @@ class PasswordManager:
 
             def addElement():
                 if platform.get() != "" and usr.get() != "" and passw.get() != "":
+
                     try:
-                        self.QUERY = f"INSERT INTO ProfilesManaged VALUES('{str(usr.get()).strip()}','{str(passw.get()).strip()}','{str(str(platform.get()).lower()).strip()}','{self.USERNAME}');"
+                        self.cursor.execute('''
+                                    INSERT INTO ProfilesManaged VALUES (?,?, ?, ?)
+                            ''', (str(usr.get()).strip(), self.encryptPassword(str(passw.get()).strip()).hex(), str(str(platform.get()).lower()).strip(), self.USERNAME))
+
                         self.cursor.execute(self.QUERY)
                         self.conn.commit()
                     except Exception as e:
-                        msg.showerror("Error", e)
+                        msg.showerror("Error in addelement: ", e)
                         usr.set("")
                         passw.set("")
                         platform.set("")
@@ -254,7 +319,7 @@ class PasswordManager:
                         platfrm = str(value[2]).strip()
 
                         try:
-                            self.QUERY = f"DELETE FROM ProfilesManaged WHERE usernm='{user}' and passw='{passw}' and platform='{platfrm}' and username='{self.USERNAME}'"
+                            self.QUERY = f"DELETE FROM ProfilesManaged WHERE usernm='{user}' and passw='{self.encryptPassword(passw).hex()}' and platform='{platfrm}' and username='{self.USERNAME}'"
                             self.cursor.execute(self.QUERY)
                             self.conn.commit()
                         except Exception as e:
@@ -274,6 +339,8 @@ class PasswordManager:
                     self.root.geometry("300x350+500+200")
                     self.USERNAME = ""
                     self.PASSWORD = ""
+                    self.PRIVATE = None
+                    self.PUBLIC = None
 
                     self.loginFrame()
                 else:
@@ -284,6 +351,8 @@ class PasswordManager:
                 if ask:
                     self.USERNAME = ""
                     self.PASSWORD = ""
+                    self.PRIVATE = None
+                    self.PUBLIC = None
                     self.root.destroy()
                     self.cursor.close()
                     self.conn.close()
@@ -312,7 +381,7 @@ class PasswordManager:
                 self.QUERY = f"select usernm, passw, platform from ProfilesManaged where username='{self.USERNAME}' ORDER BY platform"
                 self.cursor.execute(self.QUERY)
                 result = [
-                    u"⚫"+f"{i[0]} | {i[1]} | {i[2]}" for i in self.cursor.fetchall()]
+                    u"⚫"+f"{i[0]} | {self.decryptPassword(bytes.fromhex(i[1])).decode()} | {i[2]}" for i in self.cursor.fetchall()]
                 listbox.insert(tk.END, "USERNAME | PASSWORD | PLATFORM")
                 for element in result:
                     listbox.insert(tk.END, element)
